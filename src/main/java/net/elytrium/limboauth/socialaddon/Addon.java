@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -28,15 +28,12 @@ import com.velocitypowered.api.plugin.Plugin;
 import com.velocitypowered.api.plugin.PluginContainer;
 import com.velocitypowered.api.plugin.PluginDescription;
 import com.velocitypowered.api.plugin.annotation.DataDirectory;
-import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
-import com.velocitypowered.api.proxy.ServerConnection;
-import com.velocitypowered.api.scheduler.ScheduledTask;
 import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.io.File;
 import java.nio.file.Path;
 import java.sql.SQLException;
-import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -44,17 +41,16 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 import java.util.regex.Pattern;
-import net.elytrium.commons.config.Placeholders;
 import net.elytrium.commons.kyori.serialization.Serializer;
 import net.elytrium.commons.kyori.serialization.Serializers;
 import net.elytrium.commons.utils.updates.UpdatesChecker;
 import net.elytrium.limboauth.LimboAuth;
-import net.elytrium.limboauth.handler.AuthSessionHandler;
-import net.elytrium.limboauth.model.RegisteredPlayer;
 import net.elytrium.limboauth.socialaddon.command.ForceSocialUnlinkCommand;
 import net.elytrium.limboauth.socialaddon.command.ValidateLinkCommand;
+import net.elytrium.limboauth.socialaddon.handler.ButtonHandlers;
+import net.elytrium.limboauth.socialaddon.handler.MessageHandler;
 import net.elytrium.limboauth.socialaddon.listener.LimboAuthListener;
 import net.elytrium.limboauth.socialaddon.listener.ReloadListener;
 import net.elytrium.limboauth.socialaddon.model.SocialPlayer;
@@ -78,24 +74,13 @@ import org.slf4j.Logger;
     name = "LimboAuth Social Addon",
     version = BuildConstants.ADDON_VERSION,
     url = "https://elytrium.net/",
-    authors = {
-        "Elytrium (https://elytrium.net/)",
-    },
-    dependencies = {
-        @Dependency(id = "limboauth")
-    }
+    authors = {"Elytrium (https://elytrium.net/)"},
+    dependencies = {@Dependency(id = "limboauth")}
 )
 public class Addon {
 
-  private static final String INFO_BTN = "info";
-  private static final String BLOCK_BTN = "block";
-  private static final String TOTP_BTN = "2fa";
-  private static final String NOTIFY_BTN = "notify";
-  private static final String KICK_BTN = "kick";
-  private static final String RESTORE_BTN = "restore";
-  private static final String UNLINK_BTN = "unlink";
+  private static final String SELECT_BTN_PREFIX = "sel_";
   private static final String PLUGIN_MINIMUM_VERSION = "1.1.0";
-
   private static Serializer SERIALIZER;
 
   private final ProxyServer server;
@@ -104,17 +89,29 @@ public class Addon {
   private final Path dataDirectory;
   private final LimboAuth plugin;
 
-  private final Map<String, Integer> codeMap;
-  private final Map<String, TempAccount> requestedReverseMap;
+  // Legacy link flow (bot → game)
+  private final Map<String, Integer> codeMap = new ConcurrentHashMap<>();
+  private final Map<String, TempAccount> requestedReverseMap = new ConcurrentHashMap<>();
   private final Map<String, CachedRegisteredUser> cachedAccountRegistrations = new ConcurrentHashMap<>();
+
+  // New link flow (game → bot → game)
+  private final Map<String, Integer> linkInitCodeMap = new ConcurrentHashMap<>();
+  private final Map<String, String> linkInitFieldMap = new ConcurrentHashMap<>();
+  private final Map<String, String> linkInitSocialNameMap = new ConcurrentHashMap<>();
+  private final Map<String, Integer> confirmCodeMap = new ConcurrentHashMap<>();
+
+  // Unlink confirmation
+  private final Map<String, SocialPlayer> pendingUnlinks = new ConcurrentHashMap<>();
+
+  // Multi-account selection
+  private final Map<String, PendingAction> pendingActions = new ConcurrentHashMap<>();
 
   private Dao<SocialPlayer, String> dao;
   private Pattern nicknamePattern;
-
   private SocialManager socialManager;
   private List<List<AbstractSocial.ButtonItem>> keyboard;
   private GeoIp geoIp;
-  private ScheduledTask purgeCacheTask;
+  private net.elytrium.limboauth.socialaddon.social.AbstractSocial.ButtonVisibility defaultVisibility;
 
   static {
     Objects.requireNonNull(org.apache.commons.logging.impl.LogFactoryImpl.class);
@@ -122,19 +119,9 @@ public class Addon {
     Objects.requireNonNull(org.apache.commons.logging.impl.Jdk14Logger.class);
     Objects.requireNonNull(org.apache.commons.logging.impl.Jdk13LumberjackLogger.class);
     Objects.requireNonNull(org.apache.commons.logging.impl.SimpleLog.class);
-
-    // 'api.host' and 'oauth.host' is used by vk-java-sdk
-    if (System.getProperty("api.host") == null) {
-      System.setProperty("api.host", "api.vk.ru");
-    }
-
-    if (System.getProperty("oauth.host") == null) {
-      System.setProperty("oauth.host", "oauth.vk.ru");
-    }
   }
 
   @Inject
-  @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
   public Addon(ProxyServer server, Logger logger, Metrics.Factory metricsFactory, @DataDirectory Path dataDirectory) {
     this.server = server;
     this.logger = logger;
@@ -149,8 +136,6 @@ public class Addon {
     }
 
     this.plugin = (LimboAuth) container.flatMap(PluginContainer::getInstance).orElseThrow();
-    this.codeMap = new ConcurrentHashMap<>();
-    this.requestedReverseMap = new ConcurrentHashMap<>();
   }
 
   @Subscribe(order = PostOrder.NORMAL)
@@ -187,435 +172,87 @@ public class Addon {
     this.socialManager.start();
 
     this.keyboard = List.of(
+        List.of(new AbstractSocial.ButtonItem("info", Settings.IMP.MAIN.STRINGS.INFO_BTN, AbstractSocial.ButtonItem.Color.PRIMARY)),
         List.of(
-            new AbstractSocial.ButtonItem(INFO_BTN, Settings.IMP.MAIN.STRINGS.INFO_BTN, AbstractSocial.ButtonItem.Color.PRIMARY)
+            new AbstractSocial.ButtonItem("block", Settings.IMP.MAIN.STRINGS.BLOCK_TOGGLE_BTN, AbstractSocial.ButtonItem.Color.SECONDARY),
+            new AbstractSocial.ButtonItem("2fa", Settings.IMP.MAIN.STRINGS.TOGGLE_2FA_BTN, AbstractSocial.ButtonItem.Color.SECONDARY)
         ),
+        List.of(new AbstractSocial.ButtonItem("notify", Settings.IMP.MAIN.STRINGS.TOGGLE_NOTIFICATION_BTN, AbstractSocial.ButtonItem.Color.SECONDARY)),
         List.of(
-            new AbstractSocial.ButtonItem(BLOCK_BTN, Settings.IMP.MAIN.STRINGS.BLOCK_TOGGLE_BTN, AbstractSocial.ButtonItem.Color.SECONDARY),
-            new AbstractSocial.ButtonItem(TOTP_BTN, Settings.IMP.MAIN.STRINGS.TOGGLE_2FA_BTN, AbstractSocial.ButtonItem.Color.SECONDARY)
-        ),
-        List.of(
-            new AbstractSocial.ButtonItem(NOTIFY_BTN, Settings.IMP.MAIN.STRINGS.TOGGLE_NOTIFICATION_BTN, AbstractSocial.ButtonItem.Color.SECONDARY)
-        ),
-        List.of(
-            new AbstractSocial.ButtonItem(KICK_BTN, Settings.IMP.MAIN.STRINGS.KICK_BTN, AbstractSocial.ButtonItem.Color.RED),
-            new AbstractSocial.ButtonItem(RESTORE_BTN, Settings.IMP.MAIN.STRINGS.RESTORE_BTN, AbstractSocial.ButtonItem.Color.RED),
-            new AbstractSocial.ButtonItem(UNLINK_BTN, Settings.IMP.MAIN.STRINGS.UNLINK_BTN, AbstractSocial.ButtonItem.Color.RED)
+            new AbstractSocial.ButtonItem("kick", Settings.IMP.MAIN.STRINGS.KICK_BTN, AbstractSocial.ButtonItem.Color.RED),
+            new AbstractSocial.ButtonItem("restore", Settings.IMP.MAIN.STRINGS.RESTORE_BTN, AbstractSocial.ButtonItem.Color.RED),
+            new AbstractSocial.ButtonItem("unlink", Settings.IMP.MAIN.STRINGS.UNLINK_BTN, AbstractSocial.ButtonItem.Color.RED)
         )
     );
-
     this.socialManager.registerKeyboard(this.keyboard);
 
-    this.socialManager.addMessageEvent((dbField, id, message) -> {
-      String lowercaseMessage = message.toLowerCase(Locale.ROOT);
-      if (Settings.IMP.MAIN.START_MESSAGES.contains(lowercaseMessage)) {
-        this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.START_REPLY);
-        return;
-      }
+    // Register unlink confirm buttons for value→id mapping
+    this.socialManager.registerKeyboard(List.of(List.of(
+        new AbstractSocial.ButtonItem("unlink_yes", Settings.IMP.MAIN.STRINGS.UNLINK_CONFIRM_YES, AbstractSocial.ButtonItem.Color.RED),
+        new AbstractSocial.ButtonItem("unlink_no", Settings.IMP.MAIN.STRINGS.UNLINK_CONFIRM_NO, AbstractSocial.ButtonItem.Color.GREEN)
+    )));
 
-      for (String socialRegisterCmd : Settings.IMP.MAIN.SOCIAL_REGISTER_CMDS) {
-        if (lowercaseMessage.startsWith(socialRegisterCmd)) {
-          int desiredLength = socialRegisterCmd.length() + 1;
-
-          if (message.length() <= desiredLength) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_REGISTER_CMD_USAGE);
-            return;
-          }
-
-          String userIndex = dbField + id;
-          CachedRegisteredUser cachedRegisteredUser = this.cachedAccountRegistrations.get(userIndex);
-          if (cachedRegisteredUser == null) {
-            this.cachedAccountRegistrations.put(userIndex, cachedRegisteredUser = new CachedRegisteredUser());
-          }
-
-          if (cachedRegisteredUser.getRegistrationAmount() >= Settings.IMP.MAIN.MAX_REGISTRATION_COUNT_PER_TIME) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_LIMIT);
-            return;
-          }
-
-          cachedRegisteredUser.incrementRegistrationAmount();
-
-          if (this.dao.queryForEq(dbField, id).size() != 0) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
-            return;
-          }
-
-          String account = message.substring(desiredLength);
-          if (!this.nicknamePattern.matcher(account).matches()) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_INCORRECT_NICKNAME);
-            return;
-          }
-
-          String lowercaseNickname = account.toLowerCase(Locale.ROOT);
-          if (this.plugin.getPlayerDao().idExists(lowercaseNickname)) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_TAKEN_NICKNAME);
-            return;
-          }
-
-          if (!Settings.IMP.MAIN.ALLOW_PREMIUM_NAMES_REGISTRATION && this.plugin.isPremium(lowercaseNickname)) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.REGISTER_PREMIUM_NICKNAME);
-            return;
-          }
-
-          String newPassword = Long.toHexString(Double.doubleToLongBits(Math.random()));
-
-          RegisteredPlayer player = new RegisteredPlayer(account, "", "").setPassword(newPassword);
-          this.plugin.getPlayerDao().create(player);
-
-          this.linkSocial(lowercaseNickname, dbField, id);
-          this.socialManager.broadcastMessage(dbField, id,
-              Placeholders.replace(Settings.IMP.MAIN.STRINGS.REGISTER_SUCCESS, newPassword));
+    // Register sel_0..sel_9 for account selection
+    for (int i = 0; i < 10; i++) {
+      final int index = i;
+      String btnId = SELECT_BTN_PREFIX + i;
+      this.socialManager.registerButton(new AbstractSocial.ButtonItem(btnId, btnId, AbstractSocial.ButtonItem.Color.PRIMARY));
+      this.socialManager.removeButtonEvent(btnId);
+      this.socialManager.addButtonEvent(btnId, (dbField, id) -> {
+        PendingAction pending = this.pendingActions.remove(dbField + id);
+        if (pending == null) return;
+        List<SocialPlayer> accounts = pending.getAccounts();
+        if (index < accounts.size()) {
+          pending.getAction().accept(accounts.get(index));
         }
-      }
+      });
+    }
 
-      for (String socialLinkCmd : Settings.IMP.MAIN.SOCIAL_LINK_CMDS) {
-        if (lowercaseMessage.startsWith(socialLinkCmd)) {
-          int desiredLength = socialLinkCmd.length() + 1;
+    // Register button handlers
+    new ButtonHandlers(this, this.socialManager, this.dao, this.plugin, this.geoIp).registerAll();
 
-          if (message.length() <= desiredLength) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
-            return;
-          }
-
-          String[] args = message.substring(desiredLength).split(" ");
-          if (this.dao.queryForEq(dbField, id).size() != 0) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
-            return;
-          }
-
-          String account = args[0].toLowerCase(Locale.ROOT);
-          if (!this.nicknamePattern.matcher(account).matches()) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_UNKNOWN_ACCOUNT);
-            return;
-          }
-
-          if (args.length == 1) {
-            if (Settings.IMP.MAIN.DISABLE_LINK_WITHOUT_PASSWORD) {
-              this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
-              return;
-            }
-
-            int code = ThreadLocalRandom.current().nextInt(Settings.IMP.MAIN.CODE_LOWER_BOUND, Settings.IMP.MAIN.CODE_UPPER_BOUND);
-            this.codeMap.put(account, code);
-            this.requestedReverseMap.put(account, new TempAccount(dbField, id));
-            this.socialManager.broadcastMessage(dbField, id, Placeholders.replace(Settings.IMP.MAIN.STRINGS.LINK_CODE, String.valueOf(code)));
-          } else {
-            if (Settings.IMP.MAIN.DISABLE_LINK_WITH_PASSWORD) {
-              this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SOCIAL_CMD_USAGE);
-              return;
-            }
-
-            RegisteredPlayer registeredPlayer = this.plugin.getPlayerDao().queryForId(account);
-            if (AuthSessionHandler.checkPassword(args[1], registeredPlayer, this.plugin.getPlayerDao())) {
-              this.linkSocial(account, dbField, id);
-              this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_SUCCESS);
-            } else {
-              this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_WRONG_PASSWORD);
-              return;
-            }
-          }
-
-          return;
-        }
-      }
-
-      for (String forceKeyboardCmd : Settings.IMP.MAIN.FORCE_KEYBOARD_CMDS) {
-        if (lowercaseMessage.startsWith(forceKeyboardCmd)) {
-          if (this.dao.queryBuilder().where().eq(dbField, id).countOf() == 0) {
-            this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.START_REPLY);
-            return;
-          }
-
-          this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.KEYBOARD_RESTORED, this.keyboard);
-          return;
-        }
-      }
-    });
-
-    this.socialManager.addButtonEvent(INFO_BTN, (dbField, id) -> {
-      List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
-
-      if (socialPlayerList.size() == 0) {
-        return;
-      }
-
-      SocialPlayer player = socialPlayerList.get(0);
-      Optional<Player> proxyPlayer = this.server.getPlayer(player.getLowercaseNickname());
-      String server;
-      String ip;
-      String location;
-
-      if (proxyPlayer.isPresent()) {
-        Player player1 = proxyPlayer.get();
-        Optional<ServerConnection> connection = player1.getCurrentServer();
-
-        if (connection.isPresent()) {
-          server = connection.get().getServerInfo().getName();
-        } else {
-          server = Settings.IMP.MAIN.STRINGS.STATUS_OFFLINE;
-        }
-
-        ip = player1.getRemoteAddress().getAddress().getHostAddress();
-        location = Optional.ofNullable(this.geoIp).map(nonNullGeo -> nonNullGeo.getLocation(ip)).orElse("");
-      } else {
-        server = Settings.IMP.MAIN.STRINGS.STATUS_OFFLINE;
-        ip = Settings.IMP.MAIN.STRINGS.STATUS_OFFLINE;
-        location = "";
-      }
-
-      this.socialManager.broadcastMessage(dbField, id, Placeholders.replace(Settings.IMP.MAIN.STRINGS.INFO_MSG,
-              player.getLowercaseNickname(),
-              server,
-              ip,
-              location,
-              player.isNotifyEnabled() ? Settings.IMP.MAIN.STRINGS.NOTIFY_ENABLED : Settings.IMP.MAIN.STRINGS.NOTIFY_DISABLED,
-              player.isBlocked() ? Settings.IMP.MAIN.STRINGS.BLOCK_ENABLED : Settings.IMP.MAIN.STRINGS.BLOCK_DISABLED,
-              player.isTotpEnabled() ? Settings.IMP.MAIN.STRINGS.TOTP_ENABLED : Settings.IMP.MAIN.STRINGS.TOTP_DISABLED),
-          this.keyboard
-      );
-    });
-
-    this.socialManager.addButtonEvent(BLOCK_BTN, (dbField, id) -> {
-      List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
-
-      if (socialPlayerList.size() == 0) {
-        return;
-      }
-
-      SocialPlayer player = socialPlayerList.get(0);
-
-      if (player.isBlocked()) {
-        player.setBlocked(false);
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.UNBLOCK_SUCCESS, player.getLowercaseNickname()), this.keyboard
-        );
-      } else {
-        player.setBlocked(true);
-
-        this.plugin.removePlayerFromCache(player.getLowercaseNickname());
-        this.server
-            .getPlayer(player.getLowercaseNickname())
-            .ifPresent(e -> e.disconnect(Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.KICK_GAME_MESSAGE)));
-
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.BLOCK_SUCCESS, player.getLowercaseNickname()), this.keyboard
-        );
-      }
-
-      this.dao.update(player);
-    });
-
-    this.socialManager.addButtonEvent(TOTP_BTN, (dbField, id) -> {
-      List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
-
-      if (socialPlayerList.size() == 0) {
-        return;
-      }
-
-      SocialPlayer player = socialPlayerList.get(0);
-
-      if (player.isTotpEnabled()) {
-        player.setTotpEnabled(false);
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.TOTP_DISABLE_SUCCESS, player.getLowercaseNickname()), this.keyboard
-        );
-      } else {
-        player.setTotpEnabled(true);
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.TOTP_ENABLE_SUCCESS, player.getLowercaseNickname()), this.keyboard
-        );
-      }
-
-      this.dao.update(player);
-    });
-
-    this.socialManager.addButtonEvent(NOTIFY_BTN, (dbField, id) -> {
-      List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
-
-      if (socialPlayerList.size() == 0) {
-        return;
-      }
-
-      SocialPlayer player = socialPlayerList.get(0);
-
-      if (player.isNotifyEnabled()) {
-        player.setNotifyEnabled(false);
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.NOTIFY_DISABLE_SUCCESS, player.getLowercaseNickname()), this.keyboard
-        );
-      } else {
-        player.setNotifyEnabled(true);
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.NOTIFY_ENABLE_SUCCESS, player.getLowercaseNickname()), this.keyboard
-        );
-      }
-
-      this.dao.update(player);
-    });
-
-    this.socialManager.addButtonEvent(KICK_BTN, (dbField, id) -> {
-      List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
-
-      if (socialPlayerList.size() == 0) {
-        return;
-      }
-
-      SocialPlayer player = socialPlayerList.get(0);
-      Optional<Player> proxyPlayer = this.server.getPlayer(player.getLowercaseNickname());
-      this.plugin.removePlayerFromCache(player.getLowercaseNickname());
-
-      if (proxyPlayer.isPresent()) {
-        proxyPlayer.get().disconnect(Addon.getSerializer().deserialize(Settings.IMP.MAIN.STRINGS.KICK_GAME_MESSAGE));
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.KICK_SUCCESS, player.getLowercaseNickname()), this.keyboard
-        );
-      } else {
-        this.socialManager.broadcastMessage(dbField, id,
-            Settings.IMP.MAIN.STRINGS.KICK_IS_OFFLINE.replace("{NICKNAME}", player.getLowercaseNickname()), this.keyboard
-        );
-      }
-
-      this.dao.update(player);
-    });
-
-    this.socialManager.addButtonEvent(RESTORE_BTN, (dbField, id) -> {
-      List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
-
-      if (socialPlayerList.size() == 0) {
-        return;
-      }
-
-      SocialPlayer player = socialPlayerList.get(0);
-
-      if (Settings.IMP.MAIN.PROHIBIT_PREMIUM_RESTORE
-          && this.plugin.isPremiumInternal(player.getLowercaseNickname()).getState() != LimboAuth.PremiumState.CRACKED) {
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.RESTORE_MSG_PREMIUM, player.getLowercaseNickname()),
-            this.keyboard
-        );
-        return;
-      }
-
-      Dao<RegisteredPlayer, String> playerDao = this.plugin.getPlayerDao();
-
-      String newPassword = Long.toHexString(Double.doubleToLongBits(Math.random()));
-
-      UpdateBuilder<RegisteredPlayer, String> updateBuilder = playerDao.updateBuilder();
-      updateBuilder.where().eq(RegisteredPlayer.LOWERCASE_NICKNAME_FIELD, player.getLowercaseNickname());
-      updateBuilder.updateColumnValue(RegisteredPlayer.HASH_FIELD, RegisteredPlayer.genHash(newPassword));
-      boolean updated = updateBuilder.update() != 0;
-
-      if (updated) {
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.RESTORE_MSG, player.getLowercaseNickname(), newPassword),
-            this.keyboard
-        );
-      } else {
-        this.socialManager.broadcastMessage(dbField, id,
-            Placeholders.replace(Settings.IMP.MAIN.STRINGS.RESTORE_MSG_PREMIUM, player.getLowercaseNickname()),
-            this.keyboard
-        );
-      }
-    });
-
-    this.socialManager.addButtonEvent(UNLINK_BTN, (dbField, id) -> {
-      if (Settings.IMP.MAIN.DISABLE_UNLINK) {
-        this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.UNLINK_DISABLED, this.keyboard);
-        return;
-      }
-      List<SocialPlayer> socialPlayerList = this.dao.queryForEq(dbField, id);
-
-      if (socialPlayerList.size() == 0) {
-        return;
-      }
-
-      SocialPlayer player = socialPlayerList.get(0);
-
-      if (player.isBlocked()) {
-        this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.UNLINK_BLOCK_CONFLICT, this.keyboard);
-        return;
-      }
-
-      if (player.isTotpEnabled()) {
-        this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.UNLINK_2FA_CONFLICT, this.keyboard);
-        return;
-      }
-
-      Long playerId = SocialPlayer.DatabaseField.valueOf(dbField).getIdFor(player);
-      SocialPlayer.DatabaseField.valueOf(dbField).setIdFor(player, null);
-      boolean allUnlinked = Arrays.stream(SocialPlayer.DatabaseField.values())
-          .noneMatch(v -> v.getIdFor(player) != null);
-      SocialPlayer.DatabaseField.valueOf(dbField).setIdFor(player, playerId);
-
-      if (Settings.IMP.MAIN.UNLINK_BTN_ALL || allUnlinked) {
-        this.socialManager.unregisterHook(player);
-        this.dao.delete(player);
-
-        Settings.IMP.MAIN.AFTER_UNLINKAGE_COMMANDS.forEach(command ->
-            this.server.getCommandManager().executeAsync(p -> Tristate.TRUE, command.replace("{NICKNAME}", player.getLowercaseNickname())));
-      } else {
-        UpdateBuilder<SocialPlayer, String> updateBuilder = this.dao.updateBuilder();
-        updateBuilder.where().eq(SocialPlayer.LOWERCASE_NICKNAME_FIELD, player.getLowercaseNickname());
-        updateBuilder.updateColumnValue(dbField, null);
-        updateBuilder.update();
-
-        this.socialManager.unregisterHook(dbField, player);
-      }
-
-      this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.UNLINK_SUCCESS);
-      this.server.getPlayer(player.getLowercaseNickname()).ifPresent(p ->
-          p.sendMessage(SERIALIZER.deserialize(Settings.IMP.MAIN.STRINGS.UNLINK_SUCCESS_GAME)));
-    });
+    // Register message handler
+    this.socialManager.addMessageEvent(new MessageHandler(this, this.socialManager, this.dao));
   }
 
   public void onReload() throws SQLException {
-    this.load();
     this.server.getEventManager().unregisterListeners(this);
 
     ConnectionSource source = this.plugin.getConnectionSource();
     TableUtils.createTableIfNotExists(source, SocialPlayer.class);
     this.dao = DaoManager.createDao(source, SocialPlayer.class);
-
     this.plugin.migrateDb(this.dao);
-
     this.nicknamePattern = Pattern.compile(net.elytrium.limboauth.Settings.IMP.MAIN.ALLOWED_NICKNAME_REGEX);
 
-    this.server.getEventManager().register(this, new LimboAuthListener(this, this.plugin, this.dao, this.socialManager,
-        this.keyboard, this.geoIp
-    ));
+    // load() must be called AFTER dao is initialized
+    this.load();
+
+    this.server.getEventManager().register(this, new LimboAuthListener(this, this.plugin, this.dao, this.socialManager, this.keyboard, this.geoIp));
     this.server.getEventManager().register(this, new ReloadListener(this));
-
-    if (this.purgeCacheTask != null) {
-      this.purgeCacheTask.cancel();
-    }
-
-    this.purgeCacheTask = this.server.getScheduler()
-        .buildTask(this, () -> this.checkCache(this.cachedAccountRegistrations, Settings.IMP.MAIN.PURGE_REGISTRATION_CACHE_MILLIS))
-        .delay(net.elytrium.limboauth.Settings.IMP.MAIN.PURGE_CACHE_MILLIS, TimeUnit.MILLISECONDS)
-        .repeat(net.elytrium.limboauth.Settings.IMP.MAIN.PURGE_CACHE_MILLIS, TimeUnit.MILLISECONDS)
-        .schedule();
 
     CommandManager commandManager = this.server.getCommandManager();
     commandManager.unregister(Settings.IMP.MAIN.LINKAGE_MAIN_CMD);
     commandManager.unregister(Settings.IMP.MAIN.FORCE_UNLINK_MAIN_CMD);
-
-    commandManager.register(
-        Settings.IMP.MAIN.LINKAGE_MAIN_CMD,
-        new ValidateLinkCommand(this),
-        Settings.IMP.MAIN.LINKAGE_ALIAS_CMD.toArray(new String[0])
-    );
-    commandManager.register(
-        Settings.IMP.MAIN.FORCE_UNLINK_MAIN_CMD,
-        new ForceSocialUnlinkCommand(this),
-        Settings.IMP.MAIN.FORCE_UNLINK_ALIAS_CMD.toArray(new String[0])
-    );
+    commandManager.register(Settings.IMP.MAIN.LINKAGE_MAIN_CMD, new ValidateLinkCommand(this), Settings.IMP.MAIN.LINKAGE_ALIAS_CMD.toArray(new String[0]));
+    commandManager.register(Settings.IMP.MAIN.FORCE_UNLINK_MAIN_CMD, new ForceSocialUnlinkCommand(this), Settings.IMP.MAIN.FORCE_UNLINK_ALIAS_CMD.toArray(new String[0]));
   }
 
-  private void checkCache(Map<?, ? extends CachedUser> userMap, long time) {
-    userMap.entrySet().stream()
-        .filter(userEntry -> userEntry.getValue().getCheckTime() + time <= System.currentTimeMillis())
-        .map(Map.Entry::getKey)
-        .forEach(userMap::remove);
+  // ── Public API ────────────────────────────────────────────────────────────
+
+  public void linkSocial(String lowercaseNickname, String dbField, Long id) throws SQLException {
+    SocialPlayer socialPlayer = this.dao.queryForId(lowercaseNickname);
+    if (socialPlayer == null) {
+      Settings.IMP.MAIN.AFTER_LINKAGE_COMMANDS.forEach(cmd ->
+          this.server.getCommandManager().executeAsync(p -> Tristate.TRUE, cmd.replace("{NICKNAME}", lowercaseNickname)));
+      this.dao.create(new SocialPlayer(lowercaseNickname));
+    } else if (!Settings.IMP.MAIN.ALLOW_ACCOUNT_RELINK && SocialPlayer.DatabaseField.valueOf(dbField).getIdFor(socialPlayer) != null) {
+      this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
+      return;
+    }
+    UpdateBuilder<SocialPlayer, String> ub = this.dao.updateBuilder();
+    ub.where().eq(SocialPlayer.LOWERCASE_NICKNAME_FIELD, lowercaseNickname);
+    ub.updateColumnValue(dbField, id);
+    ub.update();
   }
 
   public void unregisterPlayer(String nickname) {
@@ -630,51 +267,73 @@ public class Addon {
     }
   }
 
-  public void linkSocial(String lowercaseNickname, String dbField, Long id) throws SQLException {
-    SocialPlayer socialPlayer = this.dao.queryForId(lowercaseNickname);
-    if (socialPlayer == null) {
-      Settings.IMP.MAIN.AFTER_LINKAGE_COMMANDS.forEach(command ->
-          this.server.getCommandManager().executeAsync(p -> Tristate.TRUE, command.replace("{NICKNAME}", lowercaseNickname)));
+  public boolean isAlreadyLinked(String lowercaseNickname, String dbField) throws SQLException {
+    SocialPlayer player = this.dao.queryForId(lowercaseNickname);
+    return player != null && SocialPlayer.DatabaseField.valueOf(dbField).getIdFor(player) != null;
+  }
 
-      this.dao.create(new SocialPlayer(lowercaseNickname));
-    } else if (!Settings.IMP.MAIN.ALLOW_ACCOUNT_RELINK && SocialPlayer.DatabaseField.valueOf(dbField).getIdFor(socialPlayer) != null) {
-      this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.LINK_ALREADY);
+  public int generateLinkInitCode(String lowercaseNickname, String dbField, String socialName) {
+    int code = ThreadLocalRandom.current().nextInt(Settings.IMP.MAIN.CODE_LOWER_BOUND, Settings.IMP.MAIN.CODE_UPPER_BOUND);
+    this.linkInitCodeMap.put(lowercaseNickname, code);
+    this.linkInitFieldMap.put(lowercaseNickname, dbField);
+    this.linkInitSocialNameMap.put(lowercaseNickname, socialName);
+    return code;
+  }
+
+  /** Removes step-1 maps for nickname, returns the social name */
+  public String clearLinkInitMaps(String nickname) {
+    this.linkInitCodeMap.remove(nickname);
+    this.linkInitFieldMap.remove(nickname);
+    return this.linkInitSocialNameMap.remove(nickname);
+  }
+
+  public Integer getCode(String nickname) { return this.codeMap.get(nickname); }
+  public void removeCode(String nickname) { this.codeMap.remove(nickname); this.requestedReverseMap.remove(nickname); }
+  public Integer getConfirmCode(String nickname) { return this.confirmCodeMap.get(nickname); }
+  public void removeConfirmCode(String nickname) { this.confirmCodeMap.remove(nickname); this.requestedReverseMap.remove(nickname); }
+  public TempAccount getTempAccount(String nickname) { return this.requestedReverseMap.get(nickname); }
+
+  public void withAccountSelection(String dbField, Long id, List<SocialPlayer> accounts, Consumer<SocialPlayer> action) {
+    if (accounts.size() == 1) {
+      action.accept(accounts.get(0));
       return;
     }
-
-    UpdateBuilder<SocialPlayer, String> updateBuilder = this.dao.updateBuilder();
-    updateBuilder.where().eq(SocialPlayer.LOWERCASE_NICKNAME_FIELD, lowercaseNickname);
-    updateBuilder.updateColumnValue(dbField, id);
-    updateBuilder.update();
+    List<List<AbstractSocial.ButtonItem>> selectionButtons = new ArrayList<>();
+    int limit = Math.min(accounts.size(), 10);
+    for (int i = 0; i < limit; i++) {
+      String nickname = accounts.get(i).getLowercaseNickname();
+      String btnId = SELECT_BTN_PREFIX + i;
+      selectionButtons.add(List.of(new AbstractSocial.ButtonItem(btnId, nickname, AbstractSocial.ButtonItem.Color.PRIMARY)));
+      this.socialManager.registerButton(new AbstractSocial.ButtonItem(btnId, nickname, AbstractSocial.ButtonItem.Color.PRIMARY));
+    }
+    this.pendingActions.put(dbField + id, new PendingAction(accounts, action));
+    this.socialManager.broadcastMessage(dbField, id, Settings.IMP.MAIN.STRINGS.SELECT_ACCOUNT_MSG, selectionButtons, AbstractSocial.ButtonVisibility.PREFER_INLINE);
   }
 
-  public Integer getCode(String nickname) {
-    return this.codeMap.get(nickname);
+  public CachedRegisteredUser getCachedRegistration(String userIndex) {
+    return this.cachedAccountRegistrations.computeIfAbsent(userIndex, k -> new CachedRegisteredUser());
   }
 
-  public TempAccount getTempAccount(String nickname) {
-    return this.requestedReverseMap.get(nickname);
-  }
+  // ── Getters ───────────────────────────────────────────────────────────────
 
-  public void removeCode(String nickname) {
-    this.requestedReverseMap.remove(nickname);
-    this.codeMap.remove(nickname);
-  }
+  public SocialManager getSocialManager() { return this.socialManager; }
+  public ProxyServer getServer() { return this.server; }
+  public LimboAuth getPlugin() { return this.plugin; }
+  public List<List<AbstractSocial.ButtonItem>> getKeyboard() { return this.keyboard; }
+  public Pattern getNicknamePattern() { return this.nicknamePattern; }
+  public Map<String, Integer> getCodeMap() { return this.codeMap; }
+  public Map<String, TempAccount> getRequestedReverseMap() { return this.requestedReverseMap; }
+  public Map<String, Integer> getLinkInitCodeMap() { return this.linkInitCodeMap; }
+  public Map<String, String> getLinkInitFieldMap() { return this.linkInitFieldMap; }
+  public Map<String, Integer> getConfirmCodeMap() { return this.confirmCodeMap; }
+  public Map<String, SocialPlayer> getPendingUnlinks() { return this.pendingUnlinks; }
 
-  public SocialManager getSocialManager() {
-    return this.socialManager;
-  }
+  public static Serializer getSerializer() { return SERIALIZER; }
+  private static void setSerializer(Serializer serializer) { SERIALIZER = serializer; }
 
-  public ProxyServer getServer() {
-    return this.server;
-  }
-
-  public List<List<AbstractSocial.ButtonItem>> getKeyboard() {
-    return this.keyboard;
-  }
+  // ── Inner classes ─────────────────────────────────────────────────────────
 
   public static class TempAccount {
-
     private final String dbField;
     private final long id;
 
@@ -683,43 +342,29 @@ public class Addon {
       this.id = id;
     }
 
-    public String getDbField() {
-      return this.dbField;
-    }
-
-    public long getId() {
-      return this.id;
-    }
-
+    public String getDbField() { return this.dbField; }
+    public long getId() { return this.id; }
   }
 
-  private static class CachedUser {
-
+  public static class CachedRegisteredUser {
     private final long checkTime = System.currentTimeMillis();
-
-    public long getCheckTime() {
-      return this.checkTime;
-    }
-  }
-
-  private static class CachedRegisteredUser extends CachedUser {
-
     private int registrationAmount;
 
-    public int getRegistrationAmount() {
-      return this.registrationAmount;
-    }
-
-    public void incrementRegistrationAmount() {
-      this.registrationAmount++;
-    }
+    public long getCheckTime() { return this.checkTime; }
+    public int getRegistrationAmount() { return this.registrationAmount; }
+    public void incrementRegistrationAmount() { this.registrationAmount++; }
   }
 
-  private static void setSerializer(Serializer serializer) {
-    SERIALIZER = serializer;
-  }
+  public static final class PendingAction {
+    private final List<SocialPlayer> accounts;
+    private final Consumer<SocialPlayer> action;
 
-  public static Serializer getSerializer() {
-    return SERIALIZER;
+    public PendingAction(List<SocialPlayer> accounts, Consumer<SocialPlayer> action) {
+      this.accounts = accounts;
+      this.action = action;
+    }
+
+    public List<SocialPlayer> getAccounts() { return this.accounts; }
+    public Consumer<SocialPlayer> getAction() { return this.action; }
   }
 }

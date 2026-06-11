@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -17,7 +17,6 @@
 
 package net.elytrium.limboauth.socialaddon.social;
 
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -172,13 +171,24 @@ public class DiscordSocial extends AbstractSocial {
     return player.getDiscordID() != null;
   }
 
+  @Override
+  public String getUserDisplayName(Long id) {
+    try {
+      User user = this.jda.retrieveUserById(id).complete();
+      if (user != null) {
+        return "@" + user.getName();
+      }
+    } catch (Exception ignored) {
+    }
+    return String.valueOf(id);
+  }
+
   private static class Listener extends ListenerAdapter {
 
     private final List<Role> requiredRoles;
     private final SocialMessageListener onMessageReceived;
     private final SocialButtonListener onButtonClicked;
 
-    @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
     Listener(JDA jda, SocialMessageListener onMessageReceived, SocialButtonListener onButtonClicked) {
       List<Role> list = new ArrayList<>();
       for (Object requiredRole : Settings.IMP.MAIN.DISCORD.REQUIRED_ROLES) {

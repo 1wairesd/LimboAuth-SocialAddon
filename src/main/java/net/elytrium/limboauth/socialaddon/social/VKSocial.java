@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -219,6 +219,11 @@ public class VKSocial extends AbstractSocial {
   @Override
   public boolean canSend(SocialPlayer player) {
     return player.getVkID() != null;
+  }
+
+  @Override
+  public String getUserDisplayName(Long id) {
+    return String.valueOf(id);
   }
 
   public void onMessageNew(JsonObject messageNew) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -134,6 +134,14 @@ public class SocialManager {
 
   public void registerButton(AbstractSocial.ButtonItem item) {
     this.buttonIdMap.put(item.getValue(), item.getId());
+  }
+
+  public String getUserDisplayName(String dbField, Long id) {
+    return this.socialList.stream()
+        .filter(e -> e.getDbField().equals(dbField))
+        .findFirst()
+        .map(e -> e.getUserDisplayName(id))
+        .orElse(String.valueOf(id));
   }
 
   public void broadcastMessage(SocialPlayer player, String message, List<List<AbstractSocial.ButtonItem>> item) {

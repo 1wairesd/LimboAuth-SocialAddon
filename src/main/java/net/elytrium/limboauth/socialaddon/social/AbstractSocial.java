@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -64,6 +64,8 @@ public abstract class AbstractSocial {
   public abstract void sendMessage(SocialPlayer player, String content, List<List<ButtonItem>> buttons, ButtonVisibility visibility);
 
   public abstract boolean canSend(SocialPlayer player);
+
+  public abstract String getUserDisplayName(Long id);
 
   public static class ButtonItem {
 

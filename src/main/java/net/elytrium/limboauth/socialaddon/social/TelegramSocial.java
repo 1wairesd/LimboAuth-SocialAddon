@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -17,7 +17,6 @@
 
 package net.elytrium.limboauth.socialaddon.social;
 
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.util.List;
 import java.util.stream.Collectors;
 import net.elytrium.limboauth.socialaddon.Settings;
@@ -42,10 +41,8 @@ import org.telegram.telegrambots.updatesreceivers.DefaultBotSession;
 public class TelegramSocial extends AbstractSocial {
 
   private final TelegramBotsApi api;
-  private TGBot bot;
-  private BotSession botSession;
+  private TGBot bot;  private BotSession botSession;
 
-  @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
   public TelegramSocial(SocialMessageListener onMessageReceived, SocialButtonListener onButtonClicked) throws SocialInitializationException {
     super(onMessageReceived, onButtonClicked);
 
@@ -95,6 +92,11 @@ public class TelegramSocial extends AbstractSocial {
 
   @Override
   public void sendMessage(Long id, String content, List<List<ButtonItem>> buttons, ButtonVisibility visibility) {
+    if (buttons.isEmpty()) {
+      this.bot.sendMessage(id, content, null);
+      return;
+    }
+
     ReplyKeyboard keyboard;
     switch (visibility) {
       case PREFER_INLINE: {
@@ -130,6 +132,28 @@ public class TelegramSocial extends AbstractSocial {
     return player.getTelegramID() != null;
   }
 
+  @Override
+  public String getUserDisplayName(Long id) {
+    try {
+      org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat getChat =
+          new org.telegram.telegrambots.meta.api.methods.groupadministration.GetChat();
+      getChat.setChatId(String.valueOf(id));
+      org.telegram.telegrambots.meta.api.objects.Chat chat = this.bot.execute(getChat);
+      String username = chat.getUserName();
+      if (username != null && !username.isEmpty()) {
+        return "@" + username;
+      }
+      String name = chat.getFirstName();
+      if (name != null) {
+        String last = chat.getLastName();
+        return last != null ? name + " " + last : name;
+      }
+      return String.valueOf(id);
+    } catch (TelegramApiException e) {
+      return String.valueOf(id);
+    }
+  }
+
   private static final class TGBot extends TelegramLongPollingBot {
 
     private final String token;
@@ -152,8 +176,7 @@ public class TelegramSocial extends AbstractSocial {
       return this.token;
     }
 
-    public void sendMessage(Long id, String content, ReplyKeyboard keyboard) {
-      SendMessage sendMessage = new SendMessage();
+    public void sendMessage(Long id, String content, ReplyKeyboard keyboard) {      SendMessage sendMessage = new SendMessage();
       sendMessage.setChatId(String.valueOf(id));
       sendMessage.setText(content);
       sendMessage.setReplyMarkup(keyboard);

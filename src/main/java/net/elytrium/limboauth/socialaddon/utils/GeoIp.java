@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -23,7 +23,6 @@ import com.maxmind.geoip2.exception.GeoIp2Exception;
 import com.maxmind.geoip2.model.CityResponse;
 import com.maxmind.geoip2.model.CountryResponse;
 import com.maxmind.geoip2.record.AbstractNamedRecord;
-import edu.umd.cs.findbugs.annotations.SuppressFBWarnings;
 import java.io.ByteArrayInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -43,7 +42,6 @@ public class GeoIp {
   private final DatabaseReader reader;
   private final boolean cityEnabled;
 
-  @SuppressFBWarnings("CT_CONSTRUCTOR_THROW")
   public GeoIp(Path dataPath) {
     this.cityEnabled = Settings.IMP.MAIN.GEOIP.FORMAT.contains("{CITY}");
 

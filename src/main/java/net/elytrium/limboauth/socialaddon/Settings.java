@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -31,12 +31,12 @@ public class Settings extends YamlConfig {
   public String VERSION = BuildConstants.ADDON_VERSION;
 
   @Comment({
-      "Available serializers:",
-      "LEGACY_AMPERSAND - \"&c&lExample &c&9Text\".",
-      "LEGACY_SECTION - \"§c§lExample §c§9Text\".",
-      "MINIMESSAGE - \"<bold><red>Example</red> <blue>Text</blue></bold>\". (https://webui.adventure.kyori.net/)",
-      "GSON - \"[{\"text\":\"Example\",\"bold\":true,\"color\":\"red\"},{\"text\":\" \",\"bold\":true},{\"text\":\"Text\",\"bold\":true,\"color\":\"blue\"}]\". (https://minecraft.tools/en/json_text.php/)",
-      "GSON_COLOR_DOWNSAMPLING - Same as GSON, but uses downsampling."
+          "Available serializers:",
+          "LEGACY_AMPERSAND - \"&c&lExample &c&9Text\".",
+          "LEGACY_SECTION - \"§c§lExample §c§9Text\".",
+          "MINIMESSAGE - \"<bold><red>Example</red> <blue>Text</blue></bold>\". (https://webui.adventure.kyori.net/)",
+          "GSON - \"[{\"text\":\"Example\",\"bold\":true,\"color\":\"red\"},{\"text\":\" \",\"bold\":true},{\"text\":\"Text\",\"bold\":true,\"color\":\"blue\"}]\". (https://minecraft.tools/en/json_text.php/)",
+          "GSON_COLOR_DOWNSAMPLING - Same as GSON, but uses downsampling."
   })
   public Serializers SERIALIZER = Serializers.LEGACY_AMPERSAND;
   public String PREFIX = "LimboAuth &6>>&f";
@@ -53,8 +53,8 @@ public class Settings extends YamlConfig {
     public int CODE_LOWER_BOUND = 1000000;
     public int CODE_UPPER_BOUND = 10000000;
 
-    public String LINKAGE_MAIN_CMD = "addsocial";
-    public List<String> LINKAGE_ALIAS_CMD = List.of("addvk", "addtg", "addds");
+    public String LINKAGE_MAIN_CMD = "link";
+    public List<String> LINKAGE_ALIAS_CMD = List.of();
 
     public String FORCE_UNLINK_MAIN_CMD = "forcesocialunlink";
     public List<String> FORCE_UNLINK_ALIAS_CMD = List.of("forceunlink");
@@ -83,9 +83,12 @@ public class Settings extends YamlConfig {
     @Comment("Allow linking social to the player, who already has linked this type of social")
     public boolean ALLOW_ACCOUNT_RELINK = true;
 
+    @Comment("Max Minecraft accounts that can be linked to one social account (per social type)")
+    public int MAX_ACCOUNTS_PER_SOCIAL = 3;
+
     public List<String> AFTER_LINKAGE_COMMANDS = List.of("alert {NICKNAME} has linked a social account");
     public List<String> AFTER_UNLINKAGE_COMMANDS = List.of();
-    public List<String> START_MESSAGES = List.of("/start", "Начать");
+    public List<String> START_MESSAGES = List.of("/start", "Start");
     public String START_REPLY = "Send '!account link <nickname>' to link your account";
 
     @Comment("Addon will print all exceptions if this parameter is set to true.")
@@ -95,14 +98,14 @@ public class Settings extends YamlConfig {
     public boolean PROHIBIT_PREMIUM_RESTORE = true;
 
     @Comment({
-        "NO | YES - with the option disabled",
-        "YES | NO - with the option enabled",
+            "NO | YES - with the option disabled",
+            "YES | NO - with the option enabled",
     })
     public boolean REVERSE_YES_NO_BUTTONS = false;
 
     @Comment({
-        "false - players with social 2FA enabled should enter the password",
-        "true - players with social 2FA enabled can login without the password"
+            "false - players with social 2FA enabled should enter the password",
+            "true - players with social 2FA enabled can login without the password"
     })
     public boolean AUTH_2FA_WITHOUT_PASSWORD = false;
 
@@ -111,6 +114,9 @@ public class Settings extends YamlConfig {
 
     @Comment("How many accounts can register the player per time (per purge-registration-cache-millis)")
     public int MAX_REGISTRATION_COUNT_PER_TIME = 3;
+
+    public String TELEGRAM_BOT_NAME = "@your_telegram_bot";
+    public String DISCORD_BOT_NAME = "YourDiscordBot#0000";
 
     @Create
     public MAIN.VK VK;
@@ -128,15 +134,15 @@ public class Settings extends YamlConfig {
       public String TOKEN = "1234567890";
 
       @Comment({
-          "Available: ",
-          "addrole <role id>",
-          "remrole <role id>",
-          "",
-          "Example: ",
-          "on-player-added: ",
-          " - addrole 12345678",
-          "on-player-removed: ",
-          " - remrole 12345678"
+              "Available: ",
+              "addrole <role id>",
+              "remrole <role id>",
+              "",
+              "Example: ",
+              "on-player-added: ",
+              " - addrole 12345678",
+              "on-player-removed: ",
+              " - remrole 12345678"
       })
       public List<String> ON_PLAYER_ADDED = List.of();
       public List<String> ON_PLAYER_REMOVED = List.of();
@@ -149,16 +155,16 @@ public class Settings extends YamlConfig {
       public String ACTIVITY_NAME = "LimboAuth Social Addon";
 
       @Comment({
-          "Which role ids a player must have on the Discord server to use the bot",
-          "",
-          "Example: ",
-          "required-roles: ",
-          " - 1234567890"
+              "Which role ids a player must have on the Discord server to use the bot",
+              "",
+              "Example: ",
+              "required-roles: ",
+              " - 1234567890"
       })
       public List<Object> REQUIRED_ROLES = List.of();
       @Comment({
-          "It's better to keep this option enabled if you have set required-roles config option",
-          "Requires SERVER MEMBERS INTENT to be enabled in the bot settings on the Discord Developer Portal"
+              "It's better to keep this option enabled if you have set required-roles config option",
+              "Requires SERVER MEMBERS INTENT to be enabled in the bot settings on the Discord Developer Portal"
       })
       public boolean GUILD_MEMBER_CACHE_ENABLED = false;
       public String NO_ROLES_MESSAGE = "You don't have permission to use commands";
@@ -170,32 +176,33 @@ public class Settings extends YamlConfig {
     public static class TELEGRAM {
       public boolean ENABLED = false;
       public String TOKEN = "1234567890";
+      public String BOT_NAME = "@your_telegram_bot";
     }
 
     @Create
     public MAIN.GEOIP GEOIP;
 
     @Comment({
-        "GeoIP is an offline database providing approximate IP address locations",
-        "In the SocialAddon's case, the IP location is displayed in notifications and alerts"
+            "GeoIP is an offline database providing approximate IP address locations",
+            "In the SocialAddon's case, the IP location is displayed in notifications and alerts"
     })
     public static class GEOIP {
       public boolean ENABLED = false;
       @Comment({
-          "Available placeholders: {CITY}, {COUNTRY}, {LEAST_SPECIFIC_SUBDIVISION}, {MOST_SPECIFIC_SUBDIVISION}"
+              "Available placeholders: {CITY}, {COUNTRY}, {LEAST_SPECIFIC_SUBDIVISION}, {MOST_SPECIFIC_SUBDIVISION}"
       })
       @Placeholders({"{CITY}", "{COUNTRY}", "{LEAST_SPECIFIC_SUBDIVISION}", "{MOST_SPECIFIC_SUBDIVISION}"})
       public String FORMAT = "{CITY}, {COUNTRY}";
       @Comment("ISO 639-1")
       public String LOCALE = "en";
       @Comment({
-          "MaxMind license key",
-          "Regenerate if triggers an error"
+              "MaxMind license key",
+              "Regenerate if triggers an error"
       })
       public String LICENSE_KEY = "P5g0fVdAQIq8yQau";
       @Comment({
-          "The interval at which the database will be updated, in milliseconds",
-          "Default value: 14 days"
+              "The interval at which the database will be updated, in milliseconds",
+              "Default value: 14 days"
       })
       public long UPDATE_INTERVAL = 1209600000L;
       public String DEFAULT_VALUE = "Unknown";
@@ -217,9 +224,23 @@ public class Settings extends YamlConfig {
       public String LINK_CMD_USAGE = "{PRFX} Send '!account link {NICKNAME}' to our Social Bot{NL} VK: vk.com/123{NL} DS: Bot#0000{NL} TG: @bot";
       @Placeholders({"{NICKNAME}"})
       public String LINK_WRONG_CODE = "{PRFX} Wrong code, run '!account link {NICKNAME}' again";
-      public String LINK_SUCCESS_GAME = "{PRFX} Social was successfully linked";
+      public String LINK_CODE_CORRECT = "{PRFX} Code is correct! Account successfully linked.";
+      public String LINK_CODE_INCORRECT = "{PRFX} Wrong code. Please try again.";
+      public String LINK_COMMAND_USAGE = "{PRFX} Usage: /link <tg|ds>";
+      public String LINK_AVAILABLE_OPTIONS = "{NL}&6▸ &fAvailable options: &ads&f, &atg{NL}&6▸ &fUse &c/link TG/DS{NL}";
+      public String LINK_ALREADY_EXISTS = "{PRFX} You already have a linked account. Please unlink it first.";
+      @Placeholders({"{BOT}", "{SOCIAL}"})
+      public String LINK_INSTRUCTION = "{NL} &fLinking to &c{SOCIAL}: {NL}{NL} &71. &fHover over {CODE_LINK}&f to see the code. {NL} &72. &fOpen bot &c{BOT} {NL} &73. &fSend the code to the bot.";
+      @Placeholders({"{BOT}", "{SOCIAL}"})
+      public String LINK_NEW_INSTRUCTION = "{NL} &fLinking to &c{SOCIAL}: {NL}{NL} &71. &fHover over {CODE_LINK}&f to see the code. {NL} &72. &fOpen bot &c{BOT} {NL} &73. &fSend the code to the bot.";
+      @Placeholders({"{CODE}"})
+      public String LINK_CODE_HOVER = "&c{CODE} &f- click to copy";
+      public String LINK_CODE_LINK_TEXT = "&c&nhere&r";      @Placeholders({"{SOCIAL}", "{SOCIAL_NAME}", "{CODE}"})
+      public String LINK_CONFIRM_GAME = "{PRFX} User &c{SOCIAL_NAME} &rwants to link this account.{NL}If that's you — enter &c/link {CODE}&r to confirm.{NL}Otherwise — just ignore this message.";
+      public String LINK_BOT_ALMOST_DONE = "Almost done! Return to the game and read the message in chat.";      public String LINK_SUCCESS_GAME = "{PRFX} Social was successfully linked";
       public String LINK_SUCCESS = "✅ Social was successfully linked{NL}Use '!keyboard' to show keyboard";
       public String LINK_ALREADY = "Account is already linked";
+      public String LINK_MAX_ACCOUNTS = "{PRFX} The maximum number of linked accounts for this social network has been reached.";
       public String LINK_SOCIAL_REGISTER_CMD_USAGE = "You didn't specify a nickname. Enter '!account register <nickname>'";
       public String LINK_SOCIAL_CMD_USAGE = "You didn't specify a nickname. Enter '!account link <nickname>'";
       public String LINK_UNKNOWN_ACCOUNT = "There is no account with this nickname";
@@ -296,6 +317,11 @@ public class Settings extends YamlConfig {
       public String UNLINK_SUCCESS_GAME = "{PRFX} Unlink successful";
       public String UNLINK_BLOCK_CONFLICT = "You cannot unlink the social while your account is blocked. Unblock it first";
       public String UNLINK_2FA_CONFLICT = "You cannot unlink the social while 2FA is enabled. Disable it first";
+      @Placeholders("{NICKNAME}")
+      public String UNLINK_CONFIRM_MSG = "Are you sure you want to unlink account {NICKNAME}?";
+      public String UNLINK_CONFIRM_YES = "Yes, unlink";
+      public String UNLINK_CONFIRM_NO = "No, cancel";
+      public String UNLINK_CANCELLED = "Unlinking cancelled";
 
       public String KEYBOARD_RESTORED = "Keyboard was restored";
 
@@ -303,6 +329,8 @@ public class Settings extends YamlConfig {
       public String LINK_ANNOUNCEMENT = "{PRFX} Hey! We recommend you to link a social network using the /addsocial command to secure your account";
 
       public String SOCIAL_EXCEPTION_CAUGHT = "An exception occurred while processing your request";
+
+      public String SELECT_ACCOUNT_MSG = "Select account:";
     }
   }
 }

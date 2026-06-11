@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 - 2025 Elytrium
+ * Copyright (C) 2022 - 2026 Elytrium
  *
  * This program is free software: you can redistribute it and/or modify
  * it under the terms of the GNU Affero General Public License as published by
@@ -96,7 +96,7 @@ public class LimboAuthListener {
     this.socialManager.removeButtonEvent(ASK_YES_BTN);
 
     this.socialManager.addButtonEvent(ASK_NO_BTN, (dbField, id) -> {
-      SocialPlayer player = this.queryPlayer(dbField, id);
+      SocialPlayer player = this.queryPlayerWithSession(dbField, id);
 
       if (player != null && this.sessions.containsKey(player.getLowercaseNickname())) {
         this.sessions.get(player.getLowercaseNickname()).getEvent().completeAndCancel(this.askedKick);
@@ -105,7 +105,7 @@ public class LimboAuthListener {
     });
 
     this.socialManager.addButtonEvent(ASK_YES_BTN, (dbField, id) -> {
-      SocialPlayer player = this.queryPlayer(dbField, id);
+      SocialPlayer player = this.queryPlayerWithSession(dbField, id);
 
       if (player != null && this.sessions.containsKey(player.getLowercaseNickname())) {
         AuthSession authSession = this.sessions.get(player.getLowercaseNickname());
@@ -232,14 +232,19 @@ public class LimboAuthListener {
     }
   }
 
-  private SocialPlayer queryPlayer(String dbField, Long id) {
+  private SocialPlayer queryPlayerWithSession(String dbField, Long id) {
     try {
       List<SocialPlayer> l = this.socialPlayerDao.queryForEq(dbField, id);
-
-      if (l.size() == 0) {
+      if (l.isEmpty()) {
         return null;
       }
-
+      
+      for (SocialPlayer player : l) {
+        if (this.sessions.containsKey(player.getLowercaseNickname())) {
+          return player;
+        }
+      }
+      
       return l.get(0);
     } catch (SQLException e) {
       throw new IllegalStateException(e);
